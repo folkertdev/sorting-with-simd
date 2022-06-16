@@ -5,58 +5,30 @@ const fn control((a, b, c, d): (i32, i32, i32, i32)) -> i32 {
     (a | (b << 2) | (c << 4) | (d << 6)) as i32
 }
 
-const PERMUTATION_TABLE_LESSER: [i32; 16] = [
-    control((0, 0, 0, 0)),
-    control((0, 0, 0, 0)),
-    control((1, 0, 0, 0)),
-    control((0, 1, 0, 0)),
-    control((2, 0, 0, 0)),
-    control((0, 2, 0, 0)),
-    control((1, 2, 0, 0)),
-    control((0, 1, 2, 0)),
-    control((3, 0, 0, 0)),
-    control((0, 3, 0, 0)),
-    control((1, 3, 0, 0)),
-    control((0, 1, 3, 0)),
-    control((2, 3, 0, 0)),
-    control((0, 2, 3, 0)),
-    control((1, 2, 3, 0)),
-    control((0, 1, 2, 3)),
+type Mask = (i32, i32, i32, i32);
+
+const PERMUTATION_TABLE_LESSER: [Mask; 16] = [
+    (0, 0, 0, 0),
+    (0, 0, 0, 0),
+    (1, 0, 0, 0),
+    (0, 1, 0, 0),
+    (2, 0, 0, 0),
+    (0, 2, 0, 0),
+    (1, 2, 0, 0),
+    (0, 1, 2, 0),
+    (3, 0, 0, 0),
+    (0, 3, 0, 0),
+    (1, 3, 0, 0),
+    (0, 1, 3, 0),
+    (2, 3, 0, 0),
+    (0, 2, 3, 0),
+    (1, 2, 3, 0),
+    (0, 1, 2, 3),
 ];
 
-pub fn tests() {
-    unsafe {
-        let data = [1, 2, 3, 4];
-        let data = _mm_loadu_si128(&data as *const i32 as *const _);
-
-        for n in 0..=15 {
-            println!(
-                "0b{:b}, 0x{:x}",
-                PERMUTATION_TABLE_LESSER[n], PERMUTATION_TABLE_LESSER[n]
-            );
-            let result1 = vperilps(std::mem::transmute(data), PERMUTATION_TABLE_LESSER[n]);
-            let result1: [i32; 4] = std::mem::transmute(result1);
-
-            let result2 = permute(std::mem::transmute(data), n as _);
-            let result2: [i32; 4] = std::mem::transmute(result2);
-
-            println!("- {} --- {} ---", result1 == result2, n);
-            // println!("{:?}", result1);
-            // println!("{:?}", result2);
-        }
-    }
-}
-
 #[target_feature(enable = "avx")]
-unsafe fn vperilps(mut current: __m128, mask: i32) -> __m128 {
-    let demask: [u32; 4] = [
-        (mask as u32 >> 0) & 0b11,
-        (mask as u32 >> 2) & 0b11,
-        (mask as u32 >> 4) & 0b11,
-        (mask as u32 >> 6) & 0b11,
-    ];
-
-    let mask: __m128 = std::mem::transmute(demask);
+unsafe fn vperilps(mut current: __m128, mask: (i32, i32, i32, i32)) -> __m128 {
+    let mask = _mm_set_epi32(mask.3, mask.2, mask.1, mask.0);
 
     std::arch::asm!(
         "vpermilps {a:y}, {a:y}, {m:y}",
@@ -70,29 +42,7 @@ unsafe fn vperilps(mut current: __m128, mask: i32) -> __m128 {
 
 #[inline(always)]
 unsafe fn permute(current: __m128, mask: i32) -> __m128 {
-    if true {
-        return vperilps(current, PERMUTATION_TABLE_LESSER[mask as usize]);
-    }
-
-    match mask {
-        0 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[0]),
-        1 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[1]),
-        2 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[2]),
-        3 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[3]),
-        4 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[4]),
-        5 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[5]),
-        6 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[6]),
-        7 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[7]),
-        8 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[8]),
-        9 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[9]),
-        10 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[10]),
-        11 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[11]),
-        12 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[12]),
-        13 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[13]),
-        14 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[14]),
-        15 => _mm_permute_ps(current, PERMUTATION_TABLE_LESSER[15]),
-        _ => unreachable!(),
-    }
+    vperilps(current, PERMUTATION_TABLE_LESSER[mask as usize])
 }
 
 #[inline(never)]
@@ -247,10 +197,6 @@ unsafe fn partition4(elements: &mut [i32], scratchpad: &mut [i32]) -> usize {
 
     // When the selected pivot element is the last element in the list, it performs a stable sort.
     let pivot_element = elements[elements.len() - 1];
-
-    //    let mut pivots = [elements[0], elements[1], elements[2]];
-    //    pivots.sort_unstable();
-    //    let pivot_element = pivots[1];
 
     let pivot = _mm_set1_epi32(pivot_element);
 

@@ -8,22 +8,18 @@ fn random_numbers() -> Vec<i32> {
 }
 
 fn main() {
-    if true {
-        for _ in 0..10000 {
-            let input = random_numbers();
+    for _ in 0..1000 {
+        let input = random_numbers();
 
-            //    let mut a = input.clone();
-            //    gueron2015::sort_old(&mut a);
+        //    let mut a = input.clone();
+        //    gueron2015::sort_old(&mut a);
 
-            let mut a = input.clone();
-            gueron2015::sort(&mut a);
+        let mut a = input.clone();
+        gueron2015::sort(&mut a);
 
-            let mut b = input;
-            b.sort_unstable();
+        let mut b = input;
+        b.sort_unstable();
 
-            assert!(a == b);
-        }
-    } else {
-        gueron2015::tests();
+        assert!(a == b);
     }
 }
