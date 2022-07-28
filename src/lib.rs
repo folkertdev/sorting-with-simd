@@ -195,7 +195,7 @@ unsafe fn partition4(elements: &mut [i32], scratchpad: &mut [i32]) -> usize {
     let mut bottom = 0;
     let mut top = 0;
 
-    // When the selected pivot element is the last element in the list, it performs a stable sort.
+    // naively pick the last element as the pivot. That is not optimal, but it's simple
     let pivot_element = elements[elements.len() - 1];
 
     let pivot = _mm_set1_epi32(pivot_element);
@@ -205,13 +205,9 @@ unsafe fn partition4(elements: &mut [i32], scratchpad: &mut [i32]) -> usize {
     while i + 3 < elements.len() {
         let current = _mm_loadu_si128(elements.as_ptr().add(i) as _);
 
-        // dbg!(std::mem::transmute::<_, [i32; 4]>(current));
-
         let greater_than = _mm_cmpgt_epi32(current, pivot);
 
         let greater_than_mask = _mm_movemask_ps(std::mem::transmute(greater_than));
-
-        // println!("0b{:04b}", greater_than_mask);
 
         let current = std::mem::transmute(current);
 
@@ -231,6 +227,7 @@ unsafe fn partition4(elements: &mut [i32], scratchpad: &mut [i32]) -> usize {
         i += 4;
     }
 
+    // process any trailing elements
     while i < elements.len() {
         let value = elements[i];
 
