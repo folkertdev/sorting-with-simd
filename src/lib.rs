@@ -1,3 +1,5 @@
+#![feature(stdsimd)]
+
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -38,6 +40,75 @@ unsafe fn vperilps(mut current: __m128, mask: (i32, i32, i32, i32)) -> __m128 {
     );
 
     current
+}
+
+pub unsafe fn partition_avx512(elements: &mut [i32], scratchpad: &mut [i32]) -> usize {
+    let mut bottom = 0;
+    let mut top = 0;
+
+    // When the selected pivot element is the last element in the list, it performs a stable sort.
+    let pivot_element = elements[elements.len() - 1];
+
+    // let mut pivots = [elements[0], elements[1], elements[2]];
+    // pivots.sort_unstable();
+    // let pivot_element = pivots[1];
+
+    let pivot = _mm512_set1_epi32(pivot_element);
+
+    let mut i = 0;
+
+    const N: usize = 1;
+    const W: usize = 16;
+
+    let mut currents = [pivot; N];
+
+    let empty_mask: __mmask16 = 0;
+    let mut greater_thans = [empty_mask; N];
+
+    while i + (N * W) <= elements.len() {
+        for (n, current) in currents.iter_mut().enumerate() {
+            *current = _mm512_loadu_epi32(elements.as_ptr().add(i + n * W) as _);
+        }
+
+        for (current, greater_than) in currents.into_iter().zip(greater_thans.iter_mut()) {
+            *greater_than = _mm512_cmpgt_epi32_mask(current, pivot);
+        }
+
+        for (greater_than_mask, current) in greater_thans.into_iter().zip(currents) {
+            let bigger = greater_than_mask.count_ones() as usize;
+            let smaller = W - bigger as usize;
+
+            let greater = _mm512_maskz_compress_epi32(greater_than_mask, current);
+            _mm512_storeu_epi32(scratchpad.as_ptr().add(top) as *mut _, greater);
+            top += bigger;
+
+            let lesser = _mm512_maskz_compress_epi32(!greater_than_mask, current);
+            _mm512_storeu_epi32(elements.as_ptr().add(bottom) as *mut _, lesser);
+            bottom += smaller;
+        }
+
+        i += W * N;
+    }
+
+    while i < elements.len() {
+        let value = elements[i];
+
+        if value > pivot_element {
+            scratchpad[top] = value;
+            top += 1;
+        } else {
+            elements[bottom] = value;
+            bottom += 1;
+        }
+
+        i += 1;
+    }
+
+    let n = elements.len() - top;
+
+    elements[n..].copy_from_slice(&scratchpad[..top]);
+
+    bottom
 }
 
 #[inline(always)]
@@ -266,7 +337,7 @@ fn sort_help_old(input: &mut [i32], scratchpad: &mut [i32]) {
         return;
     }
 
-    let n = unsafe { partition16(input, scratchpad) };
+    let n = unsafe { partition4(input, scratchpad) };
 
     if n == input.len() {
         sort_help_old(&mut input[..n - 1], scratchpad);
@@ -324,4 +395,136 @@ fn sort_help(initial: &mut [i32], scratchpad: &mut [i32]) {
             stack.push(start..start + n);
         }
     }
+}
+
+// taken from https://github.com/komrad36/SortingNetworks/blob/master/sorts.cpp
+unsafe fn simdsort4(current: &mut __m128i) {
+    let pass1_add4: __m128i = _mm_setr_epi32(1, 1, 3, 3);
+    let pass2_add4: __m128i = _mm_setr_epi32(2, 3, 2, 3);
+    let pass3_add4: __m128i = _mm_setr_epi32(0, 2, 2, 3);
+
+    let mut a = *current;
+    let mut b: __m128i;
+
+    b = _mm_shuffle_epi32(a, 177);
+    b = _mm_cmpgt_epi32(b, a);
+    b = _mm_add_epi32(b, pass1_add4);
+    a = _mm_castps_si128(_mm_permutevar_ps(_mm_castsi128_ps(a), b));
+
+    b = _mm_shuffle_epi32(a, 78);
+    b = _mm_cmpgt_epi32(b, a);
+    b = _mm_add_epi32(b, b);
+    b = _mm_add_epi32(b, pass2_add4);
+    a = _mm_castps_si128(_mm_permutevar_ps(_mm_castsi128_ps(a), b));
+
+    b = _mm_shuffle_epi32(a, 216);
+    b = _mm_cmpgt_epi32(b, a);
+    b = _mm_add_epi32(b, pass3_add4);
+    let ret = _mm_permutevar_ps(_mm_castsi128_ps(a), b);
+
+    _mm_storeu_ps(current as *mut _ as *mut f32, ret);
+}
+
+unsafe fn partition_vec(
+    elements: &mut [i32],
+    val: __m128i,
+    pivotvec: __m128i,
+    left_w: usize,
+    right_w: usize,
+) {
+    let mask = _mm_cmpgt_epi32(val, pivotvec);
+    let mask = _mm_movemask_ps(std::mem::transmute(mask));
+}
+
+unsafe fn partition4_in_place(elements: &mut [i32], pivot: i32) -> usize {
+    const VEC_SIZE: usize = 4;
+
+    let length = elements.len();
+    let pivotvec = _mm_set1_epi32(pivot);
+
+    let mut left = 0;
+    let left_w = 0;
+    let left_vec = _mm_loadu_si128(elements.as_ptr().add(left) as _);
+    left += VEC_SIZE;
+
+    let right = length - VEC_SIZE;
+    let right_w = length;
+    let right_vec = _mm_loadu_si128(elements.as_ptr().add(right) as _);
+    left += VEC_SIZE;
+
+    while (left + VEC_SIZE) <= right {
+        let val;
+
+        if left - left_w <= right_w - right {
+            val = _mm_loadu_si128(elements.as_ptr().add(left) as _);
+            left += VEC_SIZE;
+        } else {
+            right -= VEC_SIZE;
+            val = _mm_loadu_si128(elements.as_ptr().add(right) as _);
+        }
+
+        (left_w, right_w) = partition_vec(elements, val, pivotvec, left_w, right_w);
+    }
+
+    left_w
+    /*
+    let mut bottom = 0;
+    let mut top = 0;
+
+    // When the selected pivot element is the last element in the list, it performs a stable sort.
+    let pivot_element = elements[elements.len() - 1];
+
+    let pivot = _mm_set1_epi32(pivot_element);
+
+    let mut i = 0;
+
+    while i + 3 < elements.len() {
+        let current = _mm_loadu_si128(elements.as_ptr().add(i) as _);
+
+        // dbg!(std::mem::transmute::<_, [i32; 4]>(current));
+
+        let greater_than = _mm_cmpgt_epi32(current, pivot);
+
+        let greater_than_mask = _mm_movemask_ps(std::mem::transmute(greater_than));
+
+        // println!("0b{:04b}", greater_than_mask);
+
+        let current = std::mem::transmute(current);
+
+        // flipped from the paper; this gives an ascending sort
+        let greater = permute(current, greater_than_mask);
+        let lesser = permute(current, !greater_than_mask & 0b1111);
+
+        let bigger = greater_than_mask.count_ones() as usize;
+        let smaller = 4 - bigger as usize;
+
+        _mm_storeu_ps(scratchpad.as_ptr().add(top) as *mut _, greater);
+        top += bigger;
+
+        _mm_storeu_ps(elements.as_ptr().add(bottom) as *mut _, lesser);
+        bottom += smaller;
+
+        i += 4;
+    }
+
+    while i < elements.len() {
+        let value = elements[i];
+
+        if value > pivot_element {
+            scratchpad[top] = value;
+            top += 1;
+        } else {
+            elements[bottom] = value;
+            bottom += 1;
+        }
+
+        i += 1;
+    }
+
+    let n = elements.len() - top;
+
+    elements[n..].copy_from_slice(&scratchpad[..top]);
+
+    bottom
+    */
 }
